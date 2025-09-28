@@ -13,3 +13,4 @@ eframe = { version = "0.28", features = ["persistence"] }
 egui = "0.28"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+rfd = "0.14"

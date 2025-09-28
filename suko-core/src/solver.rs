@@ -196,7 +196,7 @@ fn unit_candidates_row(b: &Board, r: usize) -> [[bool;10];9] { let mut out=[[fal
 fn unit_candidates_col(b: &Board, c: usize) -> [[bool;10];9] { let mut out=[[false;10];9]; for r in 0..9 { out[r]=b.candidates(r,c); } out }
 fn unit_candidates_box(b: &Board, br: usize, bc: usize) -> [[bool;10];9] { let mut out=[[false;10];9]; let mut i=0; for r in br*3..br*3+3 { for c in bc*3..bc*3+3 { out[i]=b.candidates(r,c); i+=1; }} out }
 
-fn reduce_by_naked_pairs_unit(mask: u16, _vmask: u16, unit_cands: [[bool;10];9], pos: (usize,usize), unit: Unit) -> u16 {
+fn reduce_by_naked_pairs_unit(mask: u16, _vmask: u16, unit_cands: [[bool;10];9], _pos: (usize,usize), _unit: Unit) -> u16 {
     // Find any pair of cells in unit that have exactly two same candidates {a,b}. Eliminate a,b from other cells (including possibly (r,c)).
     let mut pair_mask = 0u16;
     let mut pairs = Vec::new();
