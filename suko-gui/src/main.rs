@@ -64,6 +64,8 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Suko GUI",
         options,
-        Box::new(|_| Box::<SukoApp>::default()),
+        Box::new(|_| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(Box::new(SukoApp::default()))
+        }),
     )
 }

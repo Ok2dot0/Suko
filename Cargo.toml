@@ -4,6 +4,7 @@ members = [
     "suko-tui",
     "suko-gui",
 ]
+resolver = "2"
 
 [workspace.package]
 edition = "2021"

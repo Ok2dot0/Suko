@@ -5,3 +5,5 @@ Cargo.lock
 .vscode/
 /.idea/
 devlogs/*.tmp
+devlogs/devlog2.txt
+devlogs/
