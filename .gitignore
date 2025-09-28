@@ -7,3 +7,4 @@ Cargo.lock
 devlogs/*.tmp
 devlogs/devlog2.txt
 devlogs/
+logs/

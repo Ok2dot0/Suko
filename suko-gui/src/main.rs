@@ -8,6 +8,7 @@ struct SukoApp {
     step_idx: usize,
     back: BacktrackingSolver,
     logic: LogicalSolver,
+    sel: (usize, usize),
 }
 
 impl Default for SukoApp {
@@ -19,6 +20,7 @@ impl Default for SukoApp {
             step_idx: 0,
             back: BacktrackingSolver::new(),
             logic: LogicalSolver::new(),
+            sel: (0,0),
         }
     }
 }
@@ -54,17 +56,37 @@ impl App for SukoApp {
                 }
             });
 
-            draw_board_ui(ui, &self.board);
+            draw_board_ui(ui, &mut self.board, &mut self.sel);
+
+            // Keyboard digit entry for selected cell
+            ui.input(|i| {
+                for ev in &i.events {
+                    if let egui::Event::Text(t) = ev {
+                        if let Some(ch) = t.chars().next() {
+                            if ch == '.' || ch == '0' { if !self.board.cells[self.sel.0][self.sel.1].fixed { self.board.cells[self.sel.0][self.sel.1].value=0; self.steps.clear(); self.step_idx=0; } }
+                            if ch.is_ascii_digit() && ('1'..='9').contains(&ch) {
+                                if !self.board.cells[self.sel.0][self.sel.1].fixed {
+                                    self.board.cells[self.sel.0][self.sel.1].value = ch.to_digit(10).unwrap() as u8;
+                                    self.steps.clear(); self.step_idx=0;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
         });
     }
 }
 
-fn draw_board_ui(ui: &mut egui::Ui, board: &Board) {
+fn draw_board_ui(ui: &mut egui::Ui, board: &mut Board, sel: &mut (usize,usize)) {
     egui::Grid::new("board").num_columns(9).show(ui, |ui| {
         for r in 0..9 {
             for c in 0..9 {
                 let v = board.cells[r][c].value;
-                ui.label(if v==0 { "·".to_string() } else { v.to_string() });
+                let mut txt = if v==0 { "·".to_string() } else { v.to_string() };
+                if (*sel==(r,c)) { txt = format!("[{}]", txt); } // simple visual cue
+                let resp = ui.button(txt);
+                if resp.clicked() { *sel=(r,c); }
             }
             ui.end_row();
         }
