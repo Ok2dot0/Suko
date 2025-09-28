@@ -11,6 +11,10 @@ A multi-frontend Sudoku solver in Rust with both an algorithmic (backtracking) s
 - TUI: run `cargo run -p suko-tui` and paste an 81-char puzzle string (use '.' or '0' for blanks), press `i` to load, `b` for backtracking steps, `l` for one logical step, `n` to apply next step.
 - GUI: run `cargo run -p suko-gui` and use the input field and buttons.
 
+Session exporting:
+- TUI: press `s` to export the current steps to `logs/sessions/session_*.md`.
+- GUI: click "Export session" to write the markdown log to `logs/sessions`.
+
 ## Devlogs
 
 Development logs are written to `devlogs/devlogN.txt` as features land. You can commit between milestones.

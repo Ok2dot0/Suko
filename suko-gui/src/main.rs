@@ -1,5 +1,5 @@
 use eframe::{egui, App, Frame, NativeOptions};
-use suko_core::{board::Board, solver::{BacktrackingSolver, LogicalSolver, Solver, Step}};
+use suko_core::{board::Board, solver::{BacktrackingSolver, LogicalSolver, Solver, Step}, devlog::{SessionLog, write_session_markdown}};
 
 struct SukoApp {
     input: String,
@@ -39,6 +39,12 @@ impl App for SukoApp {
                 if ui.button("Backtracking").clicked() { self.steps = self.back.solve_steps(&self.board, None); self.step_idx = 0; }
                 if ui.button("Logical step").clicked() { self.steps = self.logic.solve_steps(&self.board, Some(1)); self.step_idx=0; }
                 if ui.button("Next").clicked() { if self.step_idx < self.steps.len() { self.board = self.steps[self.step_idx].board.clone(); self.step_idx+=1; } }
+                if ui.button("Export session").clicked() {
+                    if !self.steps.is_empty() {
+                        let log = SessionLog { title: "Sudoku solving session".into(), puzzle: self.input.clone(), solver_name: if self.steps.iter().any(|s| matches!(s.kind, suko_core::solver::StepKind::Guess{..}| suko_core::solver::StepKind::Backtrack)) { "Backtracking".into() } else { "Logical".into() }, steps: self.steps.clone() };
+                        let _ = write_session_markdown("logs/sessions", &log);
+                    }
+                }
             });
 
             draw_board_ui(ui, &self.board);

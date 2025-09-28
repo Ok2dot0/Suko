@@ -1,7 +1,7 @@
 use std::io;
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::{prelude::*, widgets::*};
-use suko_core::{board::Board, solver::{BacktrackingSolver, LogicalSolver, Solver, Step}};
+use suko_core::{board::Board, solver::{BacktrackingSolver, LogicalSolver, Solver, Step}, devlog::{SessionLog, write_session_markdown}};
 
 fn draw_board(frame: &mut Frame, area: Rect, board: &Board) {
     let mut lines = Vec::new();
@@ -58,7 +58,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                     Constraint::Min(3),
                 ]).split(f.size());
             draw_board(f, chunks[0], board);
-            let help = Paragraph::new("Commands: i=load input; b=backtracking solve; l=logical step; n=next step; q=quit").block(Block::default().borders(Borders::ALL).title("Help"));
+            let help = Paragraph::new("Commands: i=load input; b=backtracking solve; l=logical step; n=next step; s=save session; q=quit").block(Block::default().borders(Borders::ALL).title("Help"));
             f.render_widget(help, chunks[1]);
             let input = Paragraph::new(input_str.as_str()).block(Block::default().borders(Borders::ALL).title("Input (81 chars, . or 0 for empty)"));
             f.render_widget(input, chunks[2]);
@@ -73,6 +73,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                     KeyCode::Char('l') => { let s = logic.solve_steps(board, Some(1)); if !s.is_empty() { *steps = s; *step_idx=0; } },
                     KeyCode::Char('n') => {
                         if *step_idx < steps.len() { let s = &steps[*step_idx]; *board = s.board.clone(); *step_idx += 1; }
+                    },
+                    KeyCode::Char('s') => {
+                        if !steps.is_empty() {
+                            let title = "Sudoku solving session".to_string();
+                            let log = SessionLog { title, puzzle: input_str.clone(), solver_name: if steps.iter().any(|s| matches!(s.kind, suko_core::solver::StepKind::Guess{..}| suko_core::solver::StepKind::Backtrack)) { "Backtracking".into() } else { "Logical".into() }, steps: steps.clone() };
+                            let _ = write_session_markdown("logs/sessions", &log);
+                        }
                     },
                     KeyCode::Backspace => { input_str.pop(); },
                     KeyCode::Char(ch) => { if input_str.len()<200 { input_str.push(ch); } },
