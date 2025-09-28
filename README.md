@@ -15,6 +15,15 @@ Session exporting:
 - TUI: press `s` to export the current steps to `logs/sessions/session_*.md`.
 - GUI: click "Export session" to write the markdown log to `logs/sessions`.
 
+Examples:
+- Example puzzles are in `examples/`. You can open them in a text editor and paste into TUI/GUI input, or type directly into the grid.
+	- `examples/easy1.sdk`
+	- `examples/hard1.sdk`
+
+Visualization hints:
+- TUI: peers of the selected cell are dimmed; selected cell is highlighted; candidates for the selected cell are shown in the Help panel.
+- GUI: peers are shaded; fixed values are colored; last step cell can be emphasized (toggle).
+
 ## Devlogs
 
 Development logs are written to `devlogs/devlogN.txt` as features land. You can commit between milestones.

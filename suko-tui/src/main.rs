@@ -11,6 +11,11 @@ fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize))
             let v = board.cells[r][c].value;
             let ch = if v == 0 { '.' } else { char::from(b'0' + v) };
             let mut style = Style::default();
+            // peer highlight: same row, col, or box as selected
+            let in_same_row = r == sel.0;
+            let in_same_col = c == sel.1;
+            let in_same_box = (r/3 == sel.0/3) && (c/3 == sel.1/3);
+            if in_same_row || in_same_col || in_same_box { style = style.fg(Color::Gray); }
             if (r, c) == sel { style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD); }
             if board.cells[r][c].fixed { style = style.fg(Color::Cyan); }
             spans.push(Span::styled(format!("{} ", ch), style));
@@ -63,9 +68,16 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                 ]).split(f.size());
             draw_board(f, chunks[0], board, *sel);
             let last_reason = steps.get(step_idx.saturating_sub(1)).map(|s| match &s.kind { suko_core::solver::StepKind::Place{ reason, .. } => reason.as_str(), suko_core::solver::StepKind::Guess{..} => "Guess", suko_core::solver::StepKind::Backtrack => "Backtrack"}).unwrap_or("");
+            // candidate hint for selected cell
+            let mut cand_str = String::new();
+            if board.cells[sel.0][sel.1].value==0 {
+                let cand = board.candidates(sel.0, sel.1);
+                let mut first=true;
+                for v in 1..=9 { if cand[v as usize] { if !first { cand_str.push(' '); } cand_str.push(char::from(b'0'+v)); first=false; } }
+            }
             let help_text = format!(
-                "Commands: arrows/hjkl=move; 1-9=set; 0/.=clear; g=lock givens; u=unlock; i=paste load; b=backtrack; l=logical; n=next; s=save; q=quit\nSelected: ({}, {})   Last: {}",
-                sel.0 + 1, sel.1 + 1, last_reason
+                "Commands: arrows/hjkl=move; 1-9=set; 0/.=clear; g=lock givens; u=unlock; i=paste load; b=backtrack; l=logical; n=next; s=save; q=quit\nSelected: ({}, {})   Candidates: [{}]   Last: {}",
+                sel.0 + 1, sel.1 + 1, cand_str, last_reason
             );
             let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title("Help"));
             f.render_widget(help, chunks[1]);
