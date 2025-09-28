@@ -45,6 +45,13 @@ impl App for SukoApp {
                         let _ = write_session_markdown("logs/sessions", &log);
                     }
                 }
+                if let Some(prev) = self.steps.get(self.step_idx.saturating_sub(1)) {
+                    match &prev.kind {
+                        suko_core::solver::StepKind::Place{ reason, .. } => { ui.label(format!("Last: {}", reason)); }
+                        suko_core::solver::StepKind::Guess{ .. } => { ui.label("Last: Guess"); }
+                        suko_core::solver::StepKind::Backtrack => { ui.label("Last: Backtrack"); }
+                    }
+                }
             });
 
             draw_board_ui(ui, &self.board);

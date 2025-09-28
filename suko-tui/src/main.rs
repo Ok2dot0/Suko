@@ -54,11 +54,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(18),
-                    Constraint::Length(3),
+                    Constraint::Length(5),
                     Constraint::Min(3),
                 ]).split(f.size());
             draw_board(f, chunks[0], board);
-            let help = Paragraph::new("Commands: i=load input; b=backtracking solve; l=logical step; n=next step; s=save session; q=quit").block(Block::default().borders(Borders::ALL).title("Help"));
+            let last_reason = steps.get(step_idx.saturating_sub(1)).map(|s| match &s.kind { suko_core::solver::StepKind::Place{ reason, .. } => reason.as_str(), suko_core::solver::StepKind::Guess{..} => "Guess", suko_core::solver::StepKind::Backtrack => "Backtrack"}).unwrap_or("");
+            let help_text = format!("Commands: i=load input; b=backtracking solve; l=logical step; n=next step; s=save session; q=quit\nLast step: {}", last_reason);
+            let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title("Help"));
             f.render_widget(help, chunks[1]);
             let input = Paragraph::new(input_str.as_str()).block(Block::default().borders(Borders::ALL).title("Input (81 chars, . or 0 for empty)"));
             f.render_widget(input, chunks[2]);
