@@ -23,6 +23,60 @@ pub trait Solver {
     fn solve_steps(&mut self, board: &Board, max_steps: Option<usize>) -> Vec<Step>;
 }
 
+/// A simple brute-force backtracer that follows the exact behavior requested:
+/// - Scan cells row-major; for the first empty cell, try values 9 down to 1
+/// - If a value doesn't cause conflicts, move to the next empty cell and repeat
+/// - If a value conflicts, decrease to the next lower value
+/// - If all values 9..1 conflict for the current cell, backtrack to the previous empty cell and decrease it
+/// - Continue until all cells are filled or no solution exists
+pub struct BacktracingBruteSolver;
+impl BacktracingBruteSolver {
+    pub fn new() -> Self { Self }
+
+    /// Solve to completion; returns Some(solved_board) if solved, else None
+    pub fn solve_to_completion(&mut self, board: &Board) -> Option<Board> {
+        let mut b = board.clone();
+        // Collect empty cell positions in row-major order
+        let mut empties: Vec<(usize, usize)> = Vec::new();
+        for r in 0..9 { for c in 0..9 { if b.cells[r][c].value == 0 { empties.push((r,c)); } } }
+        if empties.is_empty() { return Some(b); }
+
+        // Track the next value to try for each empty cell. Start above 9 so we try 9 first.
+        let mut next: Vec<u8> = vec![10u8; empties.len()];
+        let mut i: isize = 0; // index into empties
+
+        while i >= 0 && (i as usize) < empties.len() {
+            let idx = i as usize;
+            let (r, c) = empties[idx];
+
+            let mut placed = false;
+            while next[idx] > 1 {
+                next[idx] -= 1; // try next lower value (starts from 9)
+                let v = next[idx];
+                b.cells[r][c].value = v;
+                if b.is_valid() {
+                    // accept and move forward
+                    placed = true;
+                    i += 1;
+                    break;
+                }
+            }
+
+            if !placed {
+                // reset this cell and backtrack
+                b.cells[r][c].value = 0;
+                next[idx] = 10; // reset for future revisits
+                i -= 1;
+                // When we step back, we will decrease the previous cell further on the next iteration
+            }
+        }
+
+        if i < 0 { return None; }
+        // i == empties.len() => all placed
+        if b.is_valid() { Some(b) } else { None }
+    }
+}
+
 pub struct BacktrackingSolver;
 impl BacktrackingSolver {
     pub fn new() -> Self { Self }
@@ -33,18 +87,41 @@ impl Solver for BacktrackingSolver {
     fn solve_steps(&mut self, board: &Board, max_steps: Option<usize>) -> Vec<Step> {
         let mut steps = Vec::new();
         let mut b = board.clone();
-        fn find_empty(b: &Board) -> Option<(usize,usize)> { for r in 0..9 { for c in 0..9 { if b.cells[r][c].value==0 { return Some((r,c)); }}} None }
+        // Minimum Remaining Values (MRV): pick the empty cell with the fewest candidates (>0). If any empty cell has 0 candidates, fail fast.
+        fn find_mrv(b: &Board) -> Option<(usize,usize,[bool;10], usize)> {
+            let mut best: Option<(usize,usize,[bool;10], usize)> = None;
+            for r in 0..9 { for c in 0..9 {
+                if b.cells[r][c].value==0 {
+                    let cand = b.candidates(r,c);
+                    let count = (1..=9).filter(|&v| cand[v as usize]).count();
+                    if count==0 { return Some((r,c,cand,0)); }
+                    match best {
+                        None => best = Some((r,c,cand,count)),
+                        Some((_,_,_,bc)) if count < bc => best = Some((r,c,cand,count)),
+                        _ => {}
+                    }
+                }
+            }}
+            best
+        }
+        fn any_zero_candidate(b: &Board) -> bool {
+            for r in 0..9 { for c in 0..9 { if b.cells[r][c].value==0 {
+                let cand=b.candidates(r,c);
+                if (1..=9).all(|v| !cand[v as usize]) { return true; }
+            }}}
+            false
+        }
         fn rec(b: &mut Board, steps: &mut Vec<Step>, idx: &mut usize, max: Option<usize>) -> bool {
             if b.is_solved() { return true; }
             if let Some(m)=max { if *idx >= m { return false; } }
-            let Some((r,c)) = find_empty(b) else { return true; };
-            let cand = b.candidates(r,c);
+            let Some((r,c,cand,_cnt)) = find_mrv(b) else { return true; };
+            if (1..=9).all(|v| !cand[v as usize]) { return false; }
             for v in 1..=9 {
                 if !cand[v as usize] { continue; }
                 b.cells[r][c].value = v;
                 *idx += 1;
                 steps.push(Step{ index:*idx, kind: StepKind::Guess{ r, c, v }, board: b.clone() });
-                if b.is_valid() && rec(b, steps, idx, max) { return true; }
+                if b.is_valid() && !any_zero_candidate(b) && rec(b, steps, idx, max) { return true; }
                 // backtrack
                 b.cells[r][c].value = 0;
                 *idx += 1; steps.push(Step{ index:*idx, kind: StepKind::Backtrack, board: b.clone() });

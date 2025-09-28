@@ -1,8 +1,9 @@
 use std::io;
 use std::time::{Duration, Instant};
-use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
+use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::{prelude::*, widgets::*};
-use suko_core::{board::Board, solver::{BacktrackingSolver, LogicalSolver, Solver, Step}, devlog::{SessionLog, write_session_markdown}};
+use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator};
+use std::fs;
 
 fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize)) {
     let mut lines: Vec<Line> = Vec::new();
@@ -57,14 +58,14 @@ fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut input_str = String::new();
-    let mut back = BacktrackingSolver::new();
-    let mut logic = LogicalSolver::new();
+    let mut brute = BacktracingBruteSolver::new();
     let mut board = Board::empty();
-    let mut steps: Vec<Step> = Vec::new();
-    let mut step_idx: usize = 0;
     let mut sel: (usize, usize) = (0, 0);
+    // Edit & modes
+    let mut path_edit = false; // when true, keystrokes go to input_str only
+    // No maze features
 
-    let res = run_app(&mut terminal, &mut board, &mut input_str, &mut back, &mut logic, &mut steps, &mut step_idx, &mut sel);
+    let res = run_app(&mut terminal, &mut board, &mut input_str, &mut brute, &mut sel, &mut path_edit);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
@@ -75,21 +76,22 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &mut Board, input_str: &mut String, back: &mut BacktrackingSolver, logic: &mut LogicalSolver, steps: &mut Vec<Step>, step_idx: &mut usize, sel: &mut (usize, usize)) -> anyhow::Result<()> {
+fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &mut Board, input_str: &mut String, brute: &mut BacktracingBruteSolver, sel: &mut (usize, usize), path_edit: &mut bool) -> anyhow::Result<()> {
     let cooldown = Duration::from_millis(120);
     let mut last_move = Instant::now() - cooldown;
+    let mut status = String::new();
     loop {
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(18),
-                    Constraint::Length(5),
+                    Constraint::Min(18),
+                    Constraint::Length(6),
                     Constraint::Min(3),
                 ]).split(f.size());
             draw_board(f, chunks[0], board, *sel);
-            let last_reason = steps.get(step_idx.saturating_sub(1)).map(|s| match &s.kind { suko_core::solver::StepKind::Place{ reason, .. } => reason.as_str(), suko_core::solver::StepKind::Guess{..} => "Guess", suko_core::solver::StepKind::Backtrack => "Backtrack"}).unwrap_or("");
-            // candidate hint for selected cell
+
+            // Help/status
             let mut cand_str = String::new();
             if board.cells[sel.0][sel.1].value==0 {
                 let cand = board.candidates(sel.0, sel.1);
@@ -97,70 +99,136 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                 for v in 1..=9 { if cand[v as usize] { if !first { cand_str.push(' '); } cand_str.push(char::from(b'0'+v)); first=false; } }
             }
             let help_text = format!(
-                "Commands: arrows/hjkl=move; 1-9=set; 0/.=clear; g=lock givens; u=unlock; i=paste load; b=backtrack; L=logical; a=auto; S=solve; n=next; s=save; q=quit\nSelected: ({}, {})   Candidates: [{}]   Last: {}",
-                sel.0 + 1, sel.1 + 1, cand_str, last_reason
+                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Status: {}",
+                sel.0 + 1, sel.1 + 1, cand_str, status
             );
-            let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title("Help"));
+            let title = "Help";
+            let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title(title));
             f.render_widget(help, chunks[1]);
-            let input = Paragraph::new(input_str.as_str()).block(Block::default().borders(Borders::ALL).title("Input (81 chars, . or 0 for empty)"));
+
+            // Input field
+            let mut input_block = Block::default().borders(Borders::ALL);
+            input_block = if *path_edit { input_block.title("Input (FOCUSED): Enter=Open/Load • Esc=cancel") } else { input_block.title("Input: Paste 81 chars or type a path; Tab=focus") };
+            let input = Paragraph::new(input_str.as_str()).block(input_block);
             f.render_widget(input, chunks[2]);
         })?;
 
         if crossterm::event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
-                Event::Key(k) => match k.code {
-                    KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('i') => { if let Ok(b) = Board::parse(&input_str) { *board = b; *steps = Vec::new(); *step_idx=0; *sel=(0,0); } },
-                    KeyCode::Char('b') => { *steps = back.solve_steps(board, None); *step_idx=0; },
-                    KeyCode::Char('L') => { let s = logic.solve_steps(board, Some(1)); if !s.is_empty() { *steps = s; *step_idx=0; } },
-                    KeyCode::Char('n') => {
-                        if *step_idx < steps.len() { let s = &steps[*step_idx]; *board = s.board.clone(); *step_idx += 1; }
-                    },
-                    KeyCode::Char('a') => {
-                        let s = logic.solve_steps(board, None);
-                        if !s.is_empty() { *board = s.last().unwrap().board.clone(); *steps = s; *step_idx = steps.len(); }
-                    },
-                    KeyCode::Char('S') => {
-                        // logical to completion
-                        let mut all = logic.solve_steps(board, None);
-                        let mut final_b = if let Some(last)=all.last() { last.board.clone() } else { (*board).clone() };
-                        if !final_b.is_solved() {
-                            let bt = back.solve_steps(&final_b, None);
-                            let mut idx = all.len();
-                            for st in bt { idx+=1; all.push(Step{ index: idx, kind: st.kind, board: st.board }); }
-                            if let Some(last)=all.last() { final_b = last.board.clone(); }
+                Event::Key(k) => {
+                    // Path edit mode: capture text safely
+                    if *path_edit {
+                        match (k.code, k.modifiers) {
+                            (KeyCode::Esc, _) => { *path_edit = false; },
+                            (KeyCode::Enter, _) => {
+                                // Try 81 chars first, else treat as path
+                                if let Ok(norm) = super_simplify_normalize(input_str) {
+                                    match Board::parse(&norm) { Ok(b) => { *board=b; *sel=(0,0); status = "Loaded from pasted text".into(); *path_edit = false; }, Err(e) => { status = format!("Parse failed: {}", e); } }
+                                } else {
+                                    match fs::read_to_string(input_str.trim()) {
+                                        Ok(raw) => if let Ok(norm) = super_simplify_normalize(&raw) { if let Ok(b) = Board::parse(&norm) { *board=b; *sel=(0,0); status = format!("Opened {}", input_str.trim()); *path_edit = false; } } else { status = "Input lacks 81 chars".into(); },
+                                        Err(e) => status = format!("Open failed: {}", e),
+                                    }
+                                }
+                            },
+                            (KeyCode::Backspace, _) => { input_str.pop(); },
+                            (KeyCode::Char('s'), m) if m.contains(KeyModifiers::CONTROL) => {
+                                if !input_str.is_empty() {
+                                    match fs::write(input_str.trim(), board_to_sdk(board)) { Ok(_) => status = format!("Saved {}", input_str.trim()), Err(e) => status = format!("Save failed: {}", e) }
+                                }
+                            },
+                            // Do not exit edit mode on Tab; keep focus until Enter/Esc
+                            (KeyCode::Char(ch), _) => { if input_str.len() < 512 { input_str.push(ch); } },
+                            _ => {}
                         }
-                        *board = final_b; *step_idx = all.len(); *steps = all;
-                    },
-                    KeyCode::Left => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
-                    KeyCode::Right => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
-                    KeyCode::Up => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
-                    KeyCode::Down => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
-                    KeyCode::Char('h') => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
-                    KeyCode::Char('l') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
-                    KeyCode::Char('k') => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
-                    KeyCode::Char('j') => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
-                    KeyCode::Char('g') => { for r in 0..9 { for c in 0..9 { let v=board.cells[r][c].value; board.cells[r][c].fixed = v!=0; }} },
-                    KeyCode::Char('u') => { for r in 0..9 { for c in 0..9 { board.cells[r][c].fixed = false; }} },
-                    KeyCode::Char('.') | KeyCode::Char('0') => { if !board.cells[sel.0][sel.1].fixed { board.cells[sel.0][sel.1].value=0; *steps=Vec::new(); *step_idx=0; } },
-                    KeyCode::Char(ch) if ch.is_ascii_digit() => {
-                        if ('1'..='9').contains(&ch) && !board.cells[sel.0][sel.1].fixed {
-                            board.cells[sel.0][sel.1].value = ch.to_digit(10).unwrap() as u8; *steps=Vec::new(); *step_idx=0;
-                        }
-                    },
-                    KeyCode::Char('s') => {
-                        if !steps.is_empty() {
-                            let title = "Sudoku solving session".to_string();
-                            let log = SessionLog { title, puzzle: input_str.clone(), solver_name: if steps.iter().any(|s| matches!(s.kind, suko_core::solver::StepKind::Guess{..}| suko_core::solver::StepKind::Backtrack)) { "Backtracking".into() } else { "Logical".into() }, steps: steps.clone() };
-                            let _ = write_session_markdown("logs/sessions", &log);
-                        }
-                    },
-                    KeyCode::Backspace => { if !board.cells[sel.0][sel.1].fixed { board.cells[sel.0][sel.1].value=0; *steps=Vec::new(); *step_idx=0; } },
-                    KeyCode::Char(ch) => { if input_str.len()<200 { input_str.push(ch); } },
-                    _ => {}
+                        continue; // skip other handlers while editing
+                    }
+
+                    // Normal mode (not editing path)
+                    match k.code {
+                        KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Tab => { *path_edit = true; },
+                        KeyCode::Char('o') => {
+                            if let Ok(raw) = fs::read_to_string("board.sdk") {
+                                if let Ok(norm) = super_simplify_normalize(&raw) {
+                                    if let Ok(b) = Board::parse(&norm) { *board = b; *sel=(0,0); }
+                                }
+                            }
+                        },
+                        KeyCode::Char('O') => {
+                            if !input_str.is_empty() {
+                                match fs::read_to_string(input_str.trim()) {
+                                    Ok(raw) => if let Ok(norm) = super_simplify_normalize(&raw) { if let Ok(b) = Board::parse(&norm) { *board=b; *sel=(0,0); status = format!("Opened {}", input_str.trim()); } } else { status = "Input lacks 81 chars".into(); },
+                                    Err(e) => status = format!("Open failed: {}", e),
+                                }
+                            }
+                        },
+                        KeyCode::Char('b') => {
+                            status = "Solving…".into();
+                            if let Some(solved) = brute.solve_to_completion(board) { *board = solved; status = "Solved".into(); } else { status = "No solution".into(); }
+                        },
+                        KeyCode::Char('p') => {
+                            let mut gen = PuzzleGenerator::new(None);
+                            let clues = 30;
+                            *board = gen.generate_puzzle(clues);
+                            *sel = (0,0);
+                            status = format!("Generated puzzle with ~{} clues", clues);
+                        },
+                        KeyCode::Char('P') => {
+                            match input_str.trim().parse::<u64>() {
+                                Ok(seed) => {
+                                    let mut gen = PuzzleGenerator::new(Some(seed));
+                                    *board = gen.generate_puzzle(30);
+                                    *sel = (0,0);
+                                    status = format!("Generated seeded puzzle (seed {})", seed);
+                                },
+                                Err(_) => { status = "Enter numeric seed in input, then press P".into(); }
+                            }
+                        },
+                        KeyCode::Char('c') => { *board = Board::empty(); *sel=(0,0); status = "Cleared".into(); },
+                        KeyCode::Left => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
+                        KeyCode::Right => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
+                        KeyCode::Up => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
+                        KeyCode::Down => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
+                        KeyCode::Char('h') => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
+                        KeyCode::Char('l') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
+                        KeyCode::Char('k') => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
+                        KeyCode::Char('j') => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
+                        KeyCode::Char('g') => { for r in 0..9 { for c in 0..9 { let v=board.cells[r][c].value; board.cells[r][c].fixed = v!=0; }} },
+                        KeyCode::Char('u') => { for r in 0..9 { for c in 0..9 { board.cells[r][c].fixed = false; }} },
+                        KeyCode::Char('.') | KeyCode::Char('0') => { if !board.cells[sel.0][sel.1].fixed { board.cells[sel.0][sel.1].value=0; } },
+                        KeyCode::Char(ch) if ch.is_ascii_digit() => {
+                            if ('1'..='9').contains(&ch) && !board.cells[sel.0][sel.1].fixed {
+                                board.cells[sel.0][sel.1].value = ch.to_digit(10).unwrap() as u8;
+                            }
+                        },
+                        KeyCode::Char('s') => { let _ = fs::write("board.sdk", board_to_sdk(board)); status = "Saved to board.sdk".into(); },
+                        KeyCode::Char('S') => {
+                            if !input_str.is_empty() {
+                                match fs::write(input_str.trim(), board_to_sdk(board)) { Ok(_) => status = format!("Saved {}", input_str.trim()), Err(e) => status = format!("Save failed: {}", e) }
+                            }
+                        },
+                        KeyCode::Backspace => { if !board.cells[sel.0][sel.1].fixed { board.cells[sel.0][sel.1].value=0; } },
+                        _ => {}
+                    }
                 },
                 _ => {}
             }
         }
     }
+}
+
+fn board_to_sdk(b: &Board) -> String {
+    let mut s = String::with_capacity(81);
+    for r in 0..9 { for c in 0..9 { let v=b.cells[r][c].value; s.push(if v==0 { '.' } else { char::from(b'0'+v) }); }}
+    s
+}
+
+fn super_simplify_normalize(raw: &str) -> Result<String, ()> {
+    let mut out = String::with_capacity(81);
+    for ch in raw.chars() {
+        match ch { '1'..='9' => out.push(ch), '0'|'.' => out.push('.'), _=>{} }
+        if out.len()==81 { break; }
+    }
+    if out.len()==81 { Ok(out) } else { Err(()) }
 }
