@@ -2,7 +2,7 @@ use std::io;
 use std::time::{Duration, Instant};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::{prelude::*, widgets::*};
-use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator};
+use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator, highscores};
 use std::fs;
 
 fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize)) {
@@ -80,6 +80,10 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
     let cooldown = Duration::from_millis(120);
     let mut last_move = Instant::now() - cooldown;
     let mut status = String::new();
+    // Timer & progress state
+    let mut started_at: Option<Instant> = None;
+    let mut used_bruteforce = false;
+    let mut clues_target: usize = 30; // track last generation level
     loop {
         terminal.draw(|f| {
             let chunks = Layout::default()
@@ -98,9 +102,12 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                 let mut first=true;
                 for v in 1..=9 { if cand[v as usize] { if !first { cand_str.push(' '); } cand_str.push(char::from(b'0'+v)); first=false; } }
             }
+            let filled = board.cells.iter().flatten().filter(|c| c.value != 0).count();
+            let percent = (filled as f32) / 81.0 * 100.0;
+            let elapsed = started_at.map(|t| Instant::now().duration_since(t).as_secs()).unwrap_or(0);
             let help_text = format!(
-                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Status: {}",
-                sel.0 + 1, sel.1 + 1, cand_str, status
+                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Progress: {:.1}%   Time: {}s   Status: {}",
+                sel.0 + 1, sel.1 + 1, cand_str, percent, elapsed, status
             );
             let title = "Help";
             let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title(title));
@@ -165,21 +172,25 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                         },
                         KeyCode::Char('b') => {
                             status = "Solving…".into();
+                            used_bruteforce = true;
                             if let Some(solved) = brute.solve_to_completion(board) { *board = solved; status = "Solved".into(); } else { status = "No solution".into(); }
                         },
                         KeyCode::Char('p') => {
                             let mut gen = PuzzleGenerator::new(None);
-                            let clues = 30;
-                            *board = gen.generate_puzzle(clues);
+                            *board = gen.generate_puzzle(clues_target);
                             *sel = (0,0);
-                            status = format!("Generated puzzle with ~{} clues", clues);
+                            started_at = Some(Instant::now());
+                            used_bruteforce = false;
+                            status = format!("Generated puzzle with ~{} clues", clues_target);
                         },
                         KeyCode::Char('P') => {
                             match input_str.trim().parse::<u64>() {
                                 Ok(seed) => {
                                     let mut gen = PuzzleGenerator::new(Some(seed));
-                                    *board = gen.generate_puzzle(30);
+                                    *board = gen.generate_puzzle(clues_target);
                                     *sel = (0,0);
+                                    started_at = Some(Instant::now());
+                                    used_bruteforce = false;
                                     status = format!("Generated seeded puzzle (seed {})", seed);
                                 },
                                 Err(_) => { status = "Enter numeric seed in input, then press P".into(); }
@@ -200,6 +211,21 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                         KeyCode::Char(ch) if ch.is_ascii_digit() => {
                             if ('1'..='9').contains(&ch) && !board.cells[sel.0][sel.1].fixed {
                                 board.cells[sel.0][sel.1].value = ch.to_digit(10).unwrap() as u8;
+                                // Start timer on first manual move if not started
+                                if started_at.is_none() { started_at = Some(Instant::now()); }
+                                // If solved manually (no brute), record highscore
+                                if board.is_solved() && !used_bruteforce {
+                                    let dur_ms = started_at.map(|t| Instant::now().duration_since(t).as_millis()).unwrap_or(0);
+                                    let mut hs = highscores::load("highscores.json");
+                                    hs.push(highscores::HighscoreEntry {
+                                        time_ms: dur_ms,
+                                        seed: None,
+                                        clues: Some(clues_target),
+                                        date_utc: chrono::Utc::now().to_rfc3339(),
+                                    });
+                                    let _ = highscores::save("highscores.json", &hs);
+                                    status = format!("Solved manually in {}s — saved to highscores", dur_ms / 1000);
+                                }
                             }
                         },
                         KeyCode::Char('s') => { let _ = fs::write("board.sdk", board_to_sdk(board)); status = "Saved to board.sdk".into(); },

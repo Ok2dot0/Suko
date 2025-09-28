@@ -1,5 +1,6 @@
 use eframe::{egui, App, Frame, NativeOptions};
-use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator};
+use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator, highscores};
+use std::time::{Duration, Instant};
 use std::fs;
 use std::path::PathBuf;
 
@@ -14,6 +15,9 @@ struct SukoApp {
     // Puzzle generator state
     clues_target: usize,
     puzzle_seed_text: String,
+    // Timer and progress
+    started_at: Option<Instant>,
+    used_bruteforce: bool,
 }
 
 impl Default for SukoApp {
@@ -28,6 +32,8 @@ impl Default for SukoApp {
             show_candidates: true,
             clues_target: 30,
             puzzle_seed_text: String::new(),
+            started_at: None,
+            used_bruteforce: false,
         }
     }
 }
@@ -71,6 +77,7 @@ impl App for SukoApp {
                 }
                 ui.separator();
                 if ui.button(egui::RichText::new("Backtracing Solve").strong()).on_hover_text("Bruteforce: try 9→1 on first empty cell, backtrack on conflicts").clicked() {
+                    self.used_bruteforce = true;
                     match self.brute.solve_to_completion(&self.board) {
                         Some(solved) => { self.board = solved; self.status = "Solved by backtracing".to_string(); },
                         None => { self.status = "No solution found".to_string(); }
@@ -89,10 +96,25 @@ impl App for SukoApp {
                 if ui.button(egui::RichText::new("Clear Board").strong()).on_hover_text("Set all cells to empty").clicked() {
                     self.board = Board::empty();
                     self.sel = (0,0);
+                    self.started_at = None;
+                    self.used_bruteforce = false;
                     self.status = "Cleared board".into();
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_candidates, "Show candidates");
+                ui.separator();
+                // Highscores viewer
+                if ui.button("View highscores").clicked() {
+                    let list = highscores::load("highscores.json");
+                    self.status = format!("Highscores: {} entries", list.len());
+                    egui::Window::new("Highscores").open(&mut true).show(ctx, |ui| {
+                        if list.is_empty() { ui.label("No highscores yet"); }
+                        for e in list {
+                            let secs = (e.time_ms / 1000) as u64;
+                            ui.label(format!("{}s  | seed={:?}  | clues={:?}  | {}", secs, e.seed, e.clues, e.date_utc));
+                        }
+                    });
+                }
                 // Keep UI compact: only essential controls per user request
             });
             ui.add_space(6.0);
@@ -108,6 +130,8 @@ impl App for SukoApp {
                         let mut gen = PuzzleGenerator::new(None);
                         self.board = gen.generate_puzzle(self.clues_target);
                         self.sel = (0,0);
+                        self.started_at = Some(Instant::now());
+                        self.used_bruteforce = false;
                         self.status = format!("Generated puzzle ~{} clues", self.clues_target);
                     }
                     ui.separator();
@@ -118,6 +142,8 @@ impl App for SukoApp {
                             let mut gen = PuzzleGenerator::new(Some(seed));
                             self.board = gen.generate_puzzle(self.clues_target);
                             self.sel = (0,0);
+                            self.started_at = Some(Instant::now());
+                            self.used_bruteforce = false;
                             self.status = format!("Generated seeded puzzle (seed {})", seed);
                         }
                     }
@@ -134,6 +160,19 @@ impl App for SukoApp {
                             if ch.is_ascii_digit() && ('1'..='9').contains(&ch) {
                                 if !self.board.cells[self.sel.0][self.sel.1].fixed {
                                     self.board.cells[self.sel.0][self.sel.1].value = ch.to_digit(10).unwrap() as u8;
+                                    if self.started_at.is_none() { self.started_at = Some(Instant::now()); }
+                                    if self.board.is_solved() && !self.used_bruteforce {
+                                        let dur_ms = self.started_at.map(|t| Instant::now().duration_since(t).as_millis()).unwrap_or(0);
+                                        let mut hs = highscores::load("highscores.json");
+                                        hs.push(highscores::HighscoreEntry {
+                                            time_ms: dur_ms,
+                                            seed: self.puzzle_seed_text.trim().parse::<u64>().ok(),
+                                            clues: Some(self.clues_target),
+                                            date_utc: chrono::Utc::now().to_rfc3339(),
+                                        });
+                                        let _ = highscores::save("highscores.json", &hs);
+                                        self.status = format!("Solved manually in {}s — saved to highscores", dur_ms / 1000);
+                                    }
                                 }
                             }
                         }
@@ -145,7 +184,11 @@ impl App for SukoApp {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                let msg = if self.status.is_empty() { "Ready".to_string() } else { self.status.clone() };
+                let filled = self.board.cells.iter().flatten().filter(|c| c.value != 0).count();
+                let percent = (filled as f32) / 81.0 * 100.0;
+                let secs = self.started_at.map(|t| Instant::now().duration_since(t).as_secs()).unwrap_or(0);
+                let mut msg = if self.status.is_empty() { String::from("Ready") } else { self.status.clone() };
+                msg.push_str(&format!("  |  Progress: {:.1}%  |  Time: {}s", percent, secs));
                 ui.label(egui::RichText::new(msg).italics());
             });
             ui.add_space(4.0);
