@@ -1,0 +1,11 @@
+Milestone 1: Workspace scaffolding
+Timestamp: 2025-09-28 00:00:00 UTC
+----------------------------------------
+- Initialized Cargo workspace with crates: suko-core, suko-tui, suko-gui.
+- Implemented core Board struct with parsing, formatting, validity checks, and candidate computation.
+- Added step-tracing solvers: backtracking (algorithmic) and a basic logical solver (naked/hidden singles).
+- Created TUI skeleton to input puzzles and step through solutions.
+- Created GUI skeleton using egui with basic controls and grid rendering.
+- Set up README and .gitignore.
+
+Next: enrich logical strategies, add detailed step devlogs, and controls for step-by-step visualization and exporting logs.

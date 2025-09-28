@@ -1,0 +1,15 @@
+[package]
+name = "suko-gui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+suko-core = { path = "../suko-core" }
+eframe = { version = "0.28", features = ["persistence"] }
+egui = "0.28"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

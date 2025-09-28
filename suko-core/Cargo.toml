@@ -1,0 +1,14 @@
+[package]
+name = "suko-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+log = { workspace = true }
+ time = { workspace = true }
+uuid = { workspace = true }
