@@ -97,7 +97,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                 for v in 1..=9 { if cand[v as usize] { if !first { cand_str.push(' '); } cand_str.push(char::from(b'0'+v)); first=false; } }
             }
             let help_text = format!(
-                "Commands: arrows/hjkl=move; 1-9=set; 0/.=clear; g=lock givens; u=unlock; i=paste load; b=backtrack; l=logical; n=next; s=save; q=quit\nSelected: ({}, {})   Candidates: [{}]   Last: {}",
+                "Commands: arrows/hjkl=move; 1-9=set; 0/.=clear; g=lock givens; u=unlock; i=paste load; b=backtrack; L=logical; a=auto; S=solve; n=next; s=save; q=quit\nSelected: ({}, {})   Candidates: [{}]   Last: {}",
                 sel.0 + 1, sel.1 + 1, cand_str, last_reason
             );
             let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title("Help"));
@@ -112,16 +112,32 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Char('i') => { if let Ok(b) = Board::parse(&input_str) { *board = b; *steps = Vec::new(); *step_idx=0; *sel=(0,0); } },
                     KeyCode::Char('b') => { *steps = back.solve_steps(board, None); *step_idx=0; },
-                    KeyCode::Char('l') => { let s = logic.solve_steps(board, Some(1)); if !s.is_empty() { *steps = s; *step_idx=0; } },
+                    KeyCode::Char('L') => { let s = logic.solve_steps(board, Some(1)); if !s.is_empty() { *steps = s; *step_idx=0; } },
                     KeyCode::Char('n') => {
                         if *step_idx < steps.len() { let s = &steps[*step_idx]; *board = s.board.clone(); *step_idx += 1; }
+                    },
+                    KeyCode::Char('a') => {
+                        let s = logic.solve_steps(board, None);
+                        if !s.is_empty() { *board = s.last().unwrap().board.clone(); *steps = s; *step_idx = steps.len(); }
+                    },
+                    KeyCode::Char('S') => {
+                        // logical to completion
+                        let mut all = logic.solve_steps(board, None);
+                        let mut final_b = if let Some(last)=all.last() { last.board.clone() } else { (*board).clone() };
+                        if !final_b.is_solved() {
+                            let bt = back.solve_steps(&final_b, None);
+                            let mut idx = all.len();
+                            for st in bt { idx+=1; all.push(Step{ index: idx, kind: st.kind, board: st.board }); }
+                            if let Some(last)=all.last() { final_b = last.board.clone(); }
+                        }
+                        *board = final_b; *step_idx = all.len(); *steps = all;
                     },
                     KeyCode::Left => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
                     KeyCode::Right => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
                     KeyCode::Up => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
                     KeyCode::Down => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
                     KeyCode::Char('h') => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
-                    KeyCode::Char('L') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
+                    KeyCode::Char('l') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
                     KeyCode::Char('k') => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
                     KeyCode::Char('j') => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
                     KeyCode::Char('g') => { for r in 0..9 { for c in 0..9 { let v=board.cells[r][c].value; board.cells[r][c].fixed = v!=0; }} },
