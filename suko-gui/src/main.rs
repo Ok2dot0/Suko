@@ -1,6 +1,6 @@
 use eframe::{egui, App, Frame, NativeOptions};
 use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator, highscores};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,6 +18,9 @@ struct SukoApp {
     // Timer and progress
     started_at: Option<Instant>,
     used_bruteforce: bool,
+    // Highscores side panel state
+    highscores: Vec<highscores::HighscoreEntry>,
+    selected_hs: Option<usize>,
 }
 
 impl Default for SukoApp {
@@ -29,11 +32,13 @@ impl Default for SukoApp {
             status: String::new(),
             original_board: None,
             brute: BacktracingBruteSolver::new(),
-            show_candidates: true,
+            show_candidates: false,
             clues_target: 30,
             puzzle_seed_text: String::new(),
             started_at: None,
             used_bruteforce: false,
+            highscores: highscores::load("highscores.json"),
+            selected_hs: None,
         }
     }
 }
@@ -111,13 +116,49 @@ impl App for SukoApp {
                         if list.is_empty() { ui.label("No highscores yet"); }
                         for e in list {
                             let secs = (e.time_ms / 1000) as u64;
-                            ui.label(format!("{}s  | seed={:?}  | clues={:?}  | {}", secs, e.seed, e.clues, e.date_utc));
+                                ui.label(format!("{}s  | seed={}  | clues={:?}  | {}", secs, e.seed.as_deref().unwrap_or("–"), e.clues, e.date_utc));
                         }
                     });
                 }
                 // Keep UI compact: only essential controls per user request
             });
             ui.add_space(6.0);
+        });
+
+        egui::SidePanel::left("hs_left").resizable(true).default_width(260.0).show(ctx, |ui| {
+            ui.heading("Highscores");
+            // Reload + sort by best time (ascending)
+            if ui.button("Reload").clicked() { self.highscores = highscores::load("highscores.json"); }
+            if ui.button("Sort by time").clicked() { self.highscores.sort_by_key(|e| e.time_ms); }
+            ui.label(format!("Total: {}", self.highscores.len()));
+            // Delete selected highscore
+            if ui.button("Delete selected").clicked() {
+                if let Some(i) = self.selected_hs { if i < self.highscores.len() { self.highscores.remove(i); let _ = highscores::save("highscores.json", &self.highscores); self.selected_hs=None; } }
+            }
+            ui.separator();
+            if self.highscores.is_empty() { ui.label("No highscores yet"); }
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (i, e) in self.highscores.iter().enumerate() {
+                    let secs = (e.time_ms / 1000) as u64;
+                    let label = format!("#{:02}  {:>4}s  clues={:?}  seed={:?}", i+1, secs, e.clues, e.seed);
+                    let mut row = egui::SelectableLabel::new(self.selected_hs==Some(i), label);
+                    if ui.add(row).clicked() {
+                        self.selected_hs = Some(i);
+                        // Load puzzle: if has seed -> regenerate; else if has stored solution -> import as board
+                        if let Some(seed) = &e.seed {
+                            let mut gen = PuzzleGenerator::new(seed.parse::<u64>().ok());
+                            self.board = gen.generate_puzzle(e.clues.unwrap_or(self.clues_target));
+                            self.sel=(0,0); self.started_at=None; self.used_bruteforce=false;
+                                self.status = format!("Loaded puzzle from seed {}", seed);
+                        } else if let Some(ref sdk) = e.solution_sdk {
+                            if let Ok(b) = Board::parse(sdk) {
+                                self.board = b; self.sel=(0,0); self.started_at=None; self.used_bruteforce=false;
+                                self.status = "Loaded finished grid from highscore".into();
+                            }
+                        }
+                    }
+                }
+            });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -149,6 +190,10 @@ impl App for SukoApp {
                     }
                 });
                 ui.separator();
+                // Error indicator
+                if !self.board.is_valid() {
+                    ui.colored_label(egui::Color32::RED, "Board has conflicts");
+                }
                 draw_board_ui(ui, &mut self.board, &mut self.sel, self.show_candidates);
 
             // Keyboard digit entry for selected cell
@@ -166,11 +211,13 @@ impl App for SukoApp {
                                         let mut hs = highscores::load("highscores.json");
                                         hs.push(highscores::HighscoreEntry {
                                             time_ms: dur_ms,
-                                            seed: self.puzzle_seed_text.trim().parse::<u64>().ok(),
+                                            seed: if self.puzzle_seed_text.trim().is_empty() { None } else { Some(self.puzzle_seed_text.trim().to_string()) },
                                             clues: Some(self.clues_target),
                                             date_utc: chrono::Utc::now().to_rfc3339(),
+                                            solution_sdk: if self.puzzle_seed_text.trim().parse::<u64>().ok().is_none() { Some(board_to_sdk(&self.board)) } else { None },
                                         });
                                         let _ = highscores::save("highscores.json", &hs);
+                                        self.highscores = hs;
                                         self.status = format!("Solved manually in {}s — saved to highscores", dur_ms / 1000);
                                     }
                                 }
@@ -197,6 +244,7 @@ impl App for SukoApp {
 }
 
 fn draw_board_ui(ui: &mut egui::Ui, board: &mut Board, sel: &mut (usize,usize), show_candidates: bool) {
+    let conflicts = board.conflict_mask();
     egui::Grid::new("board").num_columns(9).spacing([4.0, 4.0]).show(ui, |ui| {
         for r in 0..9 {
             for c in 0..9 {
@@ -207,6 +255,7 @@ fn draw_board_ui(ui: &mut egui::Ui, board: &mut Board, sel: &mut (usize,usize), 
                 if board.cells[r][c].fixed { text = text.color(egui::Color32::LIGHT_BLUE); }
                 let mut button = egui::Button::new(text).min_size(egui::vec2(40.0, 40.0));
                 if peers { button = button.fill(egui::Color32::from_gray(40)); }
+                if conflicts[r][c] { button = button.fill(egui::Color32::from_rgb(80, 20, 20)); }
                 if *sel==(r,c) {
                     button = button.fill(egui::Color32::from_gray(60)).stroke(egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
                 }

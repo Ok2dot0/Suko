@@ -1,4 +1,4 @@
-use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand::{seq::SliceRandom, SeedableRng};
 
 use crate::board::Board;
 

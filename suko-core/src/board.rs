@@ -74,6 +74,58 @@ impl Board {
         for v in 1..=9 { cand[v as usize] = !forb[v as usize]; }
         cand
     }
+
+    // Returns a mask of cells that are in conflict (duplicate non-zero values) in any row, column, or 3x3 box
+    pub fn conflict_mask(&self) -> [[bool; 9]; 9] {
+        let mut mask = [[false; 9]; 9];
+
+        // Rows
+        for r in 0..9 {
+            let mut counts = [0u8; 10];
+            for c in 0..9 {
+                let v = self.cells[r][c].value as usize;
+                if v != 0 { counts[v] += 1; }
+            }
+            for c in 0..9 {
+                let v = self.cells[r][c].value as usize;
+                if v != 0 && counts[v] > 1 { mask[r][c] = true; }
+            }
+        }
+
+        // Columns
+        for c in 0..9 {
+            let mut counts = [0u8; 10];
+            for r in 0..9 {
+                let v = self.cells[r][c].value as usize;
+                if v != 0 { counts[v] += 1; }
+            }
+            for r in 0..9 {
+                let v = self.cells[r][c].value as usize;
+                if v != 0 && counts[v] > 1 { mask[r][c] = true; }
+            }
+        }
+
+        // Boxes
+        for br in 0..3 {
+            for bc in 0..3 {
+                let mut counts = [0u8; 10];
+                for r in br*3..br*3+3 {
+                    for c in bc*3..bc*3+3 {
+                        let v = self.cells[r][c].value as usize;
+                        if v != 0 { counts[v] += 1; }
+                    }
+                }
+                for r in br*3..br*3+3 {
+                    for c in bc*3..bc*3+3 {
+                        let v = self.cells[r][c].value as usize;
+                        if v != 0 && counts[v] > 1 { mask[r][c] = true; }
+                    }
+                }
+            }
+        }
+
+        mask
+    }
 }
 
 fn no_dupes(vals: [u8;9]) -> bool {

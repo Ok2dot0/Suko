@@ -24,9 +24,22 @@ Visualization hints:
 - TUI: peers of the selected cell are dimmed; selected cell is highlighted; candidates for the selected cell are shown in the Help panel.
 - GUI: peers are shaded; fixed values are colored; last step cell can be emphasized (toggle).
 
+## Build, Run, and Ship
+
+- Build (debug):
+	- `cargo build`
+- Run:
+	- GUI: `cargo run -p suko-gui`
+	- TUI: `cargo run -p suko-tui`
+- Release binaries:
+	- `cargo build --release`
+	- Binaries will appear in `target/release/`.
+
+The workspace uses edition 2021 and resolver v2. A release profile with LTO and strip is configured for small, fast binaries.
+
 ## Devlogs
 
-Development logs are written to `devlogs/devlogN.txt` as features land. You can commit between milestones.
+Development logs live in `devlogs/devlogN.txt`. They’re written like a short journal about what changed and why, not a checklist.
 
 ## License
 

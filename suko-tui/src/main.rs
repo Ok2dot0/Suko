@@ -7,6 +7,7 @@ use std::fs;
 
 fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize)) {
     let mut lines: Vec<Line> = Vec::new();
+    let conflicts = board.conflict_mask();
     // Top border not drawn; the surrounding Block provides it. We'll draw row separators between 3x3 bands.
     for r in 0..9 {
         let mut spans: Vec<Span> = Vec::new();
@@ -23,6 +24,7 @@ fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize))
             let in_same_box = (r/3 == sel.0/3) && (c/3 == sel.1/3);
             if in_same_row || in_same_col || in_same_box { style = style.fg(Color::Gray); }
             if (r, c) == sel { style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD); }
+            if conflicts[r][c] { style = style.fg(Color::Red).add_modifier(Modifier::BOLD); }
             if board.cells[r][c].fixed { style = style.fg(Color::Cyan); }
             spans.push(Span::styled(format!(" {} ", ch), style));
             // Box vertical separator
@@ -84,16 +86,44 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
     let mut started_at: Option<Instant> = None;
     let mut used_bruteforce = false;
     let mut clues_target: usize = 30; // track last generation level
+    // highscores state
+    let mut hs_list: Vec<highscores::HighscoreEntry> = highscores::load("highscores.json");
+    hs_list.sort_by_key(|e| e.time_ms);
+    let mut hs_selected: usize = 0; // index into hs_list for selection
     loop {
         terminal.draw(|f| {
-            let chunks = Layout::default()
+            // Layout: main area split into left (board) and right (highscores)
+            let vchunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(18),
                     Constraint::Length(6),
                     Constraint::Min(3),
                 ]).split(f.size());
-            draw_board(f, chunks[0], board, *sel);
+            let hchunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(50),
+                    Constraint::Length(30),
+                ]).split(vchunks[0]);
+            draw_board(f, hchunks[0], board, *sel);
+            // Highscores side list
+            let mut hs_lines: Vec<Line> = Vec::new();
+            if hs_list.is_empty() {
+                hs_lines.push(Line::from("No highscores yet"));
+            } else {
+                for (i, e) in hs_list.iter().enumerate() {
+                    let secs = (e.time_ms / 1000) as u64;
+                    let style = if i == hs_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    let txt = format!("#{:02} {:>4}s clues={:?} seed={}", i+1, secs, e.clues, e.seed.as_deref().unwrap_or("-"));
+                    hs_lines.push(Line::styled(txt, style));
+                }
+                hs_lines.push(Line::from(""));
+                hs_lines.push(Line::from("d=delete  r=reload  t=sort by time"));
+            }
+            let hs_block = Block::default().borders(Borders::ALL).title("Highscores (↑/↓ select, Enter load)");
+            let hs_para = Paragraph::new(hs_lines).block(hs_block);
+            f.render_widget(hs_para, hchunks[1]);
 
             // Help/status
             let mut cand_str = String::new();
@@ -105,19 +135,21 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
             let filled = board.cells.iter().flatten().filter(|c| c.value != 0).count();
             let percent = (filled as f32) / 81.0 * 100.0;
             let elapsed = started_at.map(|t| Instant::now().duration_since(t).as_secs()).unwrap_or(0);
+            // Error indicator if board invalid
+            let err_flag = if board.is_valid() { "" } else { "  [Invalid!]" };
             let help_text = format!(
-                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Progress: {:.1}%   Time: {}s   Status: {}",
-                sel.0 + 1, sel.1 + 1, cand_str, percent, elapsed, status
+                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Progress: {:.1}%   Time: {}s{}   Status: {}",
+                sel.0 + 1, sel.1 + 1, cand_str, percent, elapsed, err_flag, status
             );
             let title = "Help";
             let help = Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title(title));
-            f.render_widget(help, chunks[1]);
+            f.render_widget(help, vchunks[1]);
 
             // Input field
             let mut input_block = Block::default().borders(Borders::ALL);
             input_block = if *path_edit { input_block.title("Input (FOCUSED): Enter=Open/Load • Esc=cancel") } else { input_block.title("Input: Paste 81 chars or type a path; Tab=focus") };
             let input = Paragraph::new(input_str.as_str()).block(input_block);
-            f.render_widget(input, chunks[2]);
+            f.render_widget(input, vchunks[2]);
         })?;
 
         if crossterm::event::poll(std::time::Duration::from_millis(100))? {
@@ -171,10 +203,12 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                             }
                         },
                         KeyCode::Char('b') => {
-                            status = "Solving…".into();
                             used_bruteforce = true;
                             if let Some(solved) = brute.solve_to_completion(board) { *board = solved; status = "Solved".into(); } else { status = "No solution".into(); }
                         },
+                        KeyCode::Char('r') => { hs_list = highscores::load("highscores.json"); hs_list.sort_by_key(|e| e.time_ms); if hs_selected>=hs_list.len() && !hs_list.is_empty() { hs_selected=hs_list.len()-1; } },
+                        KeyCode::Char('t') => { hs_list.sort_by_key(|e| e.time_ms); },
+                        KeyCode::Char('d') => { if hs_selected < hs_list.len() { hs_list.remove(hs_selected); let _ = highscores::save("highscores.json", &hs_list); if hs_selected>=hs_list.len() && !hs_list.is_empty() { hs_selected=hs_list.len()-1; } } },
                         KeyCode::Char('p') => {
                             let mut gen = PuzzleGenerator::new(None);
                             *board = gen.generate_puzzle(clues_target);
@@ -184,17 +218,14 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                             status = format!("Generated puzzle with ~{} clues", clues_target);
                         },
                         KeyCode::Char('P') => {
-                            match input_str.trim().parse::<u64>() {
-                                Ok(seed) => {
-                                    let mut gen = PuzzleGenerator::new(Some(seed));
-                                    *board = gen.generate_puzzle(clues_target);
-                                    *sel = (0,0);
-                                    started_at = Some(Instant::now());
-                                    used_bruteforce = false;
-                                    status = format!("Generated seeded puzzle (seed {})", seed);
-                                },
-                                Err(_) => { status = "Enter numeric seed in input, then press P".into(); }
-                            }
+                            let seed_text = input_str.trim().to_string();
+                            let seed_num = seed_text.parse::<u64>().ok();
+                            let mut gen = PuzzleGenerator::new(seed_num);
+                            *board = gen.generate_puzzle(clues_target);
+                            *sel = (0,0);
+                            started_at = Some(Instant::now());
+                            used_bruteforce = false;
+                            status = if let Some(n) = seed_num { format!("Generated seeded puzzle (seed {})", n) } else { format!("Generated puzzle (non-numeric seed: '{}')", seed_text) };
                         },
                         KeyCode::Char('c') => { *board = Board::empty(); *sel=(0,0); status = "Cleared".into(); },
                         KeyCode::Left => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
@@ -205,6 +236,23 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                         KeyCode::Char('l') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
                         KeyCode::Char('k') => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
                         KeyCode::Char('j') => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
+                        // Navigate highscores list
+                        KeyCode::Char('K') => { if hs_selected>0 { hs_selected -= 1; } },
+                        KeyCode::Char('J') => { if hs_selected+1 < hs_list.len() { hs_selected += 1; } },
+                        KeyCode::PageUp => { if hs_selected >= 5 { hs_selected -= 5; } else { hs_selected=0; } },
+                        KeyCode::PageDown => { let len=hs_list.len(); if hs_selected+5 < len { hs_selected += 5; } else if len>0 { hs_selected=len-1; } },
+                        KeyCode::Enter => {
+                            if !hs_list.is_empty() {
+                                let e = &hs_list[hs_selected];
+                                if let Some(seed_str) = &e.seed {
+                                    let mut gen = PuzzleGenerator::new(seed_str.parse::<u64>().ok());
+                                    *board = gen.generate_puzzle(e.clues.unwrap_or(clues_target));
+                                    *sel=(0,0); started_at=None; used_bruteforce=false; status = format!("Loaded puzzle from seed {}", seed_str);
+                                } else if let Some(ref sdk) = e.solution_sdk {
+                                    if let Ok(b) = Board::parse(sdk) { *board=b; *sel=(0,0); started_at=None; used_bruteforce=false; status = "Loaded finished grid from highscore".into(); }
+                                }
+                            }
+                        },
                         KeyCode::Char('g') => { for r in 0..9 { for c in 0..9 { let v=board.cells[r][c].value; board.cells[r][c].fixed = v!=0; }} },
                         KeyCode::Char('u') => { for r in 0..9 { for c in 0..9 { board.cells[r][c].fixed = false; }} },
                         KeyCode::Char('.') | KeyCode::Char('0') => { if !board.cells[sel.0][sel.1].fixed { board.cells[sel.0][sel.1].value=0; } },
@@ -222,8 +270,10 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                                         seed: None,
                                         clues: Some(clues_target),
                                         date_utc: chrono::Utc::now().to_rfc3339(),
+                                        solution_sdk: Some(board_to_sdk(board)),
                                     });
                                     let _ = highscores::save("highscores.json", &hs);
+                                    hs_list = hs;
                                     status = format!("Solved manually in {}s — saved to highscores", dur_ms / 1000);
                                 }
                             }
