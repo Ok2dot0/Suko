@@ -1,16 +1,21 @@
 use std::io;
+use std::time::{Duration, Instant};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::{prelude::*, widgets::*};
 use suko_core::{board::Board, solver::{BacktrackingSolver, LogicalSolver, Solver, Step}, devlog::{SessionLog, write_session_markdown}};
 
 fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize)) {
     let mut lines: Vec<Line> = Vec::new();
+    // Top border not drawn; the surrounding Block provides it. We'll draw row separators between 3x3 bands.
     for r in 0..9 {
         let mut spans: Vec<Span> = Vec::new();
         for c in 0..9 {
             let v = board.cells[r][c].value;
-            let ch = if v == 0 { '.' } else { char::from(b'0' + v) };
+            let ch = if v == 0 { '·' } else { char::from(b'0' + v) };
             let mut style = Style::default();
+            // Subgrid background hint via gray tone
+            let subgrid_tint = if (r/3 + c/3) % 2 == 0 { Color::DarkGray } else { Color::Reset };
+            if subgrid_tint != Color::Reset { style = style.bg(subgrid_tint); }
             // peer highlight: same row, col, or box as selected
             let in_same_row = r == sel.0;
             let in_same_col = c == sel.1;
@@ -18,15 +23,29 @@ fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize))
             if in_same_row || in_same_col || in_same_box { style = style.fg(Color::Gray); }
             if (r, c) == sel { style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD); }
             if board.cells[r][c].fixed { style = style.fg(Color::Cyan); }
-            spans.push(Span::styled(format!("{} ", ch), style));
-            if c % 3 == 2 { spans.push(Span::raw("| ")); }
+            spans.push(Span::styled(format!(" {} ", ch), style));
+            // Box vertical separator
+            if c % 3 == 2 && c != 8 { spans.push(Span::styled("┃", Style::default().fg(Color::White))); spans.push(Span::raw(" ")); }
+            else { spans.push(Span::raw("")); }
         }
         lines.push(Line::from(spans));
-        if r % 3 == 2 { lines.push(Line::from("")); }
+        // Heavy horizontal separator between boxes
+        if r % 3 == 2 && r != 8 {
+            lines.push(Line::from(Span::styled("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", Style::default().fg(Color::White))));
+        }
     }
     let block = Block::default().borders(Borders::ALL).title("Sudoku");
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, area);
+}
+
+fn try_move_sel(sel: &mut (usize, usize), last_move: &mut Instant, cooldown: Duration, dr: isize, dc: isize) {
+    let now = Instant::now();
+    if now.duration_since(*last_move) < cooldown { return; }
+    let nr = ((sel.0 as isize + dr).rem_euclid(9)) as usize;
+    let nc = ((sel.1 as isize + dc).rem_euclid(9)) as usize;
+    *sel = (nr, nc);
+    *last_move = now;
 }
 
 fn main() -> anyhow::Result<()> {
@@ -57,6 +76,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &mut Board, input_str: &mut String, back: &mut BacktrackingSolver, logic: &mut LogicalSolver, steps: &mut Vec<Step>, step_idx: &mut usize, sel: &mut (usize, usize)) -> anyhow::Result<()> {
+    let cooldown = Duration::from_millis(120);
+    let mut last_move = Instant::now() - cooldown;
     loop {
         terminal.draw(|f| {
             let chunks = Layout::default()
@@ -95,14 +116,14 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                     KeyCode::Char('n') => {
                         if *step_idx < steps.len() { let s = &steps[*step_idx]; *board = s.board.clone(); *step_idx += 1; }
                     },
-                    KeyCode::Left => { if sel.1>0 { sel.1-=1; } else { sel.1=8; } },
-                    KeyCode::Right => { if sel.1<8 { sel.1+=1; } else { sel.1=0; } },
-                    KeyCode::Up => { if sel.0>0 { sel.0-=1; } else { sel.0=8; } },
-                    KeyCode::Down => { if sel.0<8 { sel.0+=1; } else { sel.0=0; } },
-                    KeyCode::Char('h') => { if sel.1>0 { sel.1-=1; } else { sel.1=8; } },
-                    KeyCode::Char('L') => { if sel.1<8 { sel.1+=1; } else { sel.1=0; } },
-                    KeyCode::Char('k') => { if sel.0>0 { sel.0-=1; } else { sel.0=8; } },
-                    KeyCode::Char('j') => { if sel.0<8 { sel.0+=1; } else { sel.0=0; } },
+                    KeyCode::Left => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
+                    KeyCode::Right => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
+                    KeyCode::Up => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
+                    KeyCode::Down => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
+                    KeyCode::Char('h') => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
+                    KeyCode::Char('L') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
+                    KeyCode::Char('k') => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
+                    KeyCode::Char('j') => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
                     KeyCode::Char('g') => { for r in 0..9 { for c in 0..9 { let v=board.cells[r][c].value; board.cells[r][c].fixed = v!=0; }} },
                     KeyCode::Char('u') => { for r in 0..9 { for c in 0..9 { board.cells[r][c].fixed = false; }} },
                     KeyCode::Char('.') | KeyCode::Char('0') => { if !board.cells[sel.0][sel.1].fixed { board.cells[sel.0][sel.1].value=0; *steps=Vec::new(); *step_idx=0; } },
