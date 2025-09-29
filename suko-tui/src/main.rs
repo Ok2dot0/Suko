@@ -2,7 +2,7 @@ use std::io;
 use std::time::{Duration, Instant};
 use crossterm::{event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers}, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::{prelude::*, widgets::*};
-use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator, highscores};
+use suko_core::{board::Board, solver::{BacktracingBruteSolver, LogicalSolver, Solver, StepKind}, puzzle::PuzzleGenerator, highscores};
 use std::fs;
 
 fn draw_board(frame: &mut Frame, area: Rect, board: &Board, sel: (usize, usize)) {
@@ -90,6 +90,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
     let mut hs_list: Vec<highscores::HighscoreEntry> = highscores::load("highscores.json");
     hs_list.sort_by_key(|e| e.time_ms);
     let mut hs_selected: usize = 0; // index into hs_list for selection
+    let mut recent_steps: Vec<String> = Vec::new();
+    let mut show_steps_panel = true;
     loop {
         terminal.draw(|f| {
             // Layout: main area split into left (board) and right (highscores)
@@ -102,10 +104,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                 ]).split(f.size());
             let hchunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Min(50),
-                    Constraint::Length(30),
-                ]).split(vchunks[0]);
+                .constraints(if show_steps_panel { [Constraint::Min(50), Constraint::Length(30), Constraint::Length(48)] } else { [Constraint::Min(50), Constraint::Length(30), Constraint::Length(0)] })
+                .split(vchunks[0]);
             draw_board(f, hchunks[0], board, *sel);
             // Highscores side list
             let mut hs_lines: Vec<Line> = Vec::new();
@@ -125,6 +125,23 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
             let hs_para = Paragraph::new(hs_lines).block(hs_block);
             f.render_widget(hs_para, hchunks[1]);
 
+            // Recent steps panel (right)
+            if show_steps_panel {
+                let mut lines: Vec<Line> = Vec::new();
+                if recent_steps.is_empty() {
+                    lines.push(Line::from("No logical steps yet"));
+                } else {
+                    for (i, s) in recent_steps.iter().rev().enumerate().take(100) {
+                        lines.push(Line::from(format!("{}: {}", recent_steps.len()-i, s)));
+                    }
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from("Steps: l=logical step  L=auto logical  x=clear  ]=[ toggle panel"));
+                let block = Block::default().borders(Borders::ALL).title("What happened");
+                let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+                f.render_widget(para, hchunks[2]);
+            }
+
             // Help/status
             let mut cand_str = String::new();
             if board.cells[sel.0][sel.1].value==0 {
@@ -138,7 +155,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
             // Error indicator if board invalid
             let err_flag = if board.is_valid() { "" } else { "  [Invalid!]" };
             let help_text = format!(
-                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Progress: {:.1}%   Time: {}s{}   Status: {}",
+                "arrows/hjkl=move | 1-9=set | 0/.=clear | o=Open board.sdk | s=Save board.sdk | O=Open path | S=Save path | Tab: focus input | c=Clear | l=Logical step | L=Auto logical | ]=[ toggle steps | b=Backtracing solve | p=Random puzzle | P=Seeded puzzle | q=Quit\nSelected: ({}, {})   Candidates: [{}]   Progress: {:.1}%   Time: {}s{}   Status: {}",
                 sel.0 + 1, sel.1 + 1, cand_str, percent, elapsed, err_flag, status
             );
             let title = "Help";
@@ -194,6 +211,42 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                                 }
                             }
                         },
+                        KeyCode::Char(']') | KeyCode::Char('=') => { show_steps_panel = !show_steps_panel; },
+                        KeyCode::Char('l') => {
+                            let mut solver = LogicalSolver::new();
+                            let steps = solver.solve_steps(board, Some(1));
+                            if let Some(last) = steps.last() {
+                                *board = last.board.clone();
+                                let desc = match &last.kind {
+                                    StepKind::Place{ r,c,v,reason } => format!("Place {} at ({}, {}) — {}", v, r+1, c+1, reason),
+                                    StepKind::Guess{ r,c,v } => format!("Guess {} at ({}, {})", v, r+1, c+1),
+                                    StepKind::Backtrack => "Backtrack".to_string(),
+                                };
+                                status = desc.clone();
+                                recent_steps.push(desc);
+                                if recent_steps.len()>200 { let overflow = recent_steps.len()-200; recent_steps.drain(0..overflow); }
+                            } else { status = "No logical step available".into(); }
+                        },
+                        KeyCode::Char('L') => {
+                            let mut solver = LogicalSolver::new();
+                            let steps = solver.solve_steps(board, None);
+                            if steps.is_empty() { status = "No logical moves found".into(); }
+                            else {
+                                let mut count=0usize;
+                                for s in &steps {
+                                    if let StepKind::Place{ r,c,v,reason } = &s.kind {
+                                        let desc = format!("Place {} at ({}, {}) — {}", v, r+1, c+1, reason);
+                                        recent_steps.push(desc);
+                                        count+=1;
+                                    }
+                                }
+                                if recent_steps.len()>200 { let overflow = recent_steps.len()-200; recent_steps.drain(0..overflow); }
+                                if let Some(last) = steps.last() { *board = last.board.clone(); }
+                                if started_at.is_none() { started_at = Some(Instant::now()); }
+                                status = format!("Applied {} logical step(s)", count);
+                            }
+                        },
+                        KeyCode::Char('x') => { recent_steps.clear(); },
                         KeyCode::Char('O') => {
                             if !input_str.is_empty() {
                                 match fs::read_to_string(input_str.trim()) {
@@ -233,7 +286,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
                         KeyCode::Up => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
                         KeyCode::Down => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
                         KeyCode::Char('h') => { try_move_sel(sel, &mut last_move, cooldown, 0, -1); },
-                        KeyCode::Char('l') => { try_move_sel(sel, &mut last_move, cooldown, 0, 1); },
+                        // Note: 'l' is reserved for logical step above; arrow Right or 'L' (auto logical) handle logic; use Right for movement
                         KeyCode::Char('k') => { try_move_sel(sel, &mut last_move, cooldown, -1, 0); },
                         KeyCode::Char('j') => { try_move_sel(sel, &mut last_move, cooldown, 1, 0); },
                         // Navigate highscores list

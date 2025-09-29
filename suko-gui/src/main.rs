@@ -1,5 +1,5 @@
 use eframe::{egui, App, Frame, NativeOptions};
-use suko_core::{board::Board, solver::BacktracingBruteSolver, puzzle::PuzzleGenerator, highscores};
+use suko_core::{board::Board, solver::{BacktracingBruteSolver, LogicalSolver, Solver, StepKind}, puzzle::PuzzleGenerator, highscores};
 use std::time::Instant;
 use std::fs;
 use std::path::PathBuf;
@@ -21,6 +21,8 @@ struct SukoApp {
     // Highscores side panel state
     highscores: Vec<highscores::HighscoreEntry>,
     selected_hs: Option<usize>,
+    // Recent logical step descriptions for user understanding
+    recent_steps: Vec<String>,
 }
 
 impl Default for SukoApp {
@@ -39,6 +41,7 @@ impl Default for SukoApp {
             used_bruteforce: false,
             highscores: highscores::load("highscores.json"),
             selected_hs: None,
+            recent_steps: Vec::new(),
         }
     }
 }
@@ -56,6 +59,45 @@ impl App for SukoApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.heading("Suko");
+                ui.separator();
+                if ui.button(egui::RichText::new("Logical step").strong()).on_hover_text("Apply one human-style logical step (singles, reductions) and describe it").clicked() {
+                    let mut solver = LogicalSolver::new();
+                    let steps = solver.solve_steps(&self.board, Some(1));
+                    if let Some(last) = steps.last() {
+                        self.board = last.board.clone();
+                        if self.started_at.is_none() { self.started_at = Some(Instant::now()); }
+                        self.used_bruteforce = false;
+                        let desc = match &last.kind {
+                            StepKind::Place{ r,c,v,reason } => format!("Place {} at ({}, {}) — {}", v, r+1, c+1, reason),
+                            StepKind::Guess{ r,c,v } => format!("Guess {} at ({}, {})", v, r+1, c+1),
+                            StepKind::Backtrack => "Backtrack".to_string(),
+                        };
+                        self.status = format!("{}", desc);
+                        self.push_recent(desc);
+                    } else {
+                        self.status = "No logical step available".into();
+                    }
+                }
+                if ui.button(egui::RichText::new("Auto logical").strong()).on_hover_text("Apply human-style logic until no more progress and list the steps").clicked() {
+                    let mut solver = LogicalSolver::new();
+                    let steps = solver.solve_steps(&self.board, None);
+                    if let Some(last) = steps.last() {
+                        self.board = last.board.clone();
+                        if self.started_at.is_none() { self.started_at = Some(Instant::now()); }
+                        self.used_bruteforce = false;
+                        let mut count = 0usize;
+                        for s in &steps {
+                            if let StepKind::Place{ r,c,v,reason } = &s.kind {
+                                let desc = format!("Place {} at ({}, {}) — {}", v, r+1, c+1, reason);
+                                self.push_recent(desc);
+                                count += 1;
+                            }
+                        }
+                        self.status = format!("Applied {} logical step(s)", count);
+                    } else {
+                        self.status = "No logical moves found".into();
+                    }
+                }
                 ui.separator();
                 if ui.button(egui::RichText::new("Open Puzzle…").strong()).on_hover_text("Open a .sdk or .txt with 81 characters (0/.) as blanks").clicked() {
                     if let Some(path) = rfd::FileDialog::new().add_filter("Sudoku", &["sdk","txt"]).pick_file() {
@@ -161,6 +203,22 @@ impl App for SukoApp {
             });
         });
 
+        // Right panel: recent logical steps description
+        egui::SidePanel::right("steps_right").resizable(true).default_width(320.0).show(ctx, |ui| {
+            ui.heading("What just happened?");
+            if self.recent_steps.is_empty() {
+                ui.label("No logical steps applied yet.");
+            } else {
+                if ui.button("Clear list").clicked() { self.recent_steps.clear(); }
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, s) in self.recent_steps.iter().rev().enumerate() {
+                        ui.label(format!("{}: {}", self.recent_steps.len()-i, s));
+                    }
+                });
+            }
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(8.0);
             // Sudoku toolbar (generation)
@@ -240,6 +298,14 @@ impl App for SukoApp {
             });
             ui.add_space(4.0);
         });
+    }
+}
+
+impl SukoApp {
+    fn push_recent(&mut self, desc: String) {
+        const MAX: usize = 200;
+        self.recent_steps.push(desc);
+        if self.recent_steps.len() > MAX { let overflow = self.recent_steps.len() - MAX; self.recent_steps.drain(0..overflow); }
     }
 }
 
