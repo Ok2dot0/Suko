@@ -85,7 +85,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, board: &m
     // Timer & progress state
     let mut started_at: Option<Instant> = None;
     let mut used_bruteforce = false;
-    let mut clues_target: usize = 30; // track last generation level
+    let clues_target: usize = 30; // track last generation level
     // highscores state
     let mut hs_list: Vec<highscores::HighscoreEntry> = highscores::load("highscores.json");
     hs_list.sort_by_key(|e| e.time_ms);

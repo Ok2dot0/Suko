@@ -183,7 +183,7 @@ impl App for SukoApp {
                 for (i, e) in self.highscores.iter().enumerate() {
                     let secs = (e.time_ms / 1000) as u64;
                     let label = format!("#{:02}  {:>4}s  clues={:?}  seed={:?}", i+1, secs, e.clues, e.seed);
-                    let mut row = egui::SelectableLabel::new(self.selected_hs==Some(i), label);
+                    let row = egui::SelectableLabel::new(self.selected_hs==Some(i), label);
                     if ui.add(row).clicked() {
                         self.selected_hs = Some(i);
                         // Load puzzle: if has seed -> regenerate; else if has stored solution -> import as board

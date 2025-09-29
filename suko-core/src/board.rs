@@ -6,7 +6,7 @@ pub struct Cell {
     pub value: u8,        // 0 for empty
     pub fixed: bool,      // given by puzzle
 }
-
+a
 impl Default for Cell {
     fn default() -> Self { Self { value: 0, fixed: false } }
 }
